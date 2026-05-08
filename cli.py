@@ -405,6 +405,30 @@ def cmd_cpu(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_all(args: argparse.Namespace) -> int:
+    """全量命令：一次性输出所有已支持的系统信息汇总"""
+    print("系统信息汇总")
+    print("=" * 50)
+    print()
+
+    # 本地时间
+    cmd_time(argparse.Namespace(format=None))
+    print()
+
+    # CPU 信息
+    cmd_cpu(argparse.Namespace())
+    print()
+
+    # 内存信息
+    cmd_mem(argparse.Namespace())
+    print()
+
+    # 磁盘信息
+    cmd_disk(argparse.Namespace())
+
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构建并返回参数解析器"""
     parser = argparse.ArgumentParser(
@@ -495,6 +519,14 @@ def build_parser() -> argparse.ArgumentParser:
         description="读取各挂载磁盘的总容量、已用容量、剩余容量及使用率并输出。",
     )
     disk_parser.set_defaults(func=cmd_disk)
+
+    # all 子命令
+    all_parser = subparsers.add_parser(
+        "all",
+        help="一键输出所有系统信息汇总",
+        description="一次性输出本地时间、CPU、内存、磁盘等全部系统信息。",
+    )
+    all_parser.set_defaults(func=cmd_all)
 
     return parser
 
