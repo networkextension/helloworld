@@ -259,6 +259,132 @@ def cmd_mem(args: argparse.Namespace) -> int:
     return 0
 
 
+# 常见的虚拟/伪文件系统类型，采集磁盘信息时跳过
+_SKIP_FSTYPES = {
+    "devfs", "devtmpfs", "tmpfs", "proc", "sysfs",
+    "cgroup", "cgroup2", "overlay", "squashfs",
+    "autofs", "fuse", "fusectl", "securityfs",
+    "pstore", "bpf", "configfs", "debugfs",
+    "tracefs", "mqueue", "hugetlbfs", "rpc_pipefs",
+    "binfmt_misc", "nfsd", "efivarfs",
+}
+
+
+def _get_mounts() -> List[Dict[str, str]]:
+    """获取系统挂载点列表，返回 [{device, mountpoint, fstype}, ...]"""
+    system = platform.system()
+    mounts: List[Dict[str, str]] = []
+
+    if system == "Darwin":
+        try:
+            result = subprocess.run(
+                ["mount"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            for line in result.stdout.splitlines():
+                # 格式: /dev/disk2s1 on / (apfs, sealed, local, journaled)
+                if " on " not in line or " (" not in line:
+                    continue
+                device, rest = line.split(" on ", 1)
+                mountpoint, rest = rest.split(" (", 1)
+                fstype = rest.split(",")[0].strip()
+                mounts.append({
+                    "device": device.strip(),
+                    "mountpoint": mountpoint.strip(),
+                    "fstype": fstype,
+                })
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
+
+    elif system == "Linux":
+        try:
+            with open("/proc/mounts", "r") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        mounts.append({
+                            "device": parts[0],
+                            "mountpoint": parts[1],
+                            "fstype": parts[2],
+                        })
+        except FileNotFoundError:
+            pass
+
+    return mounts
+
+
+def get_disk_info() -> List[Dict[str, Optional[str]]]:
+    """跨平台采集各挂载磁盘容量信息"""
+    disks: List[Dict[str, Optional[str]]] = []
+    seen: set = set()
+
+    for mount in _get_mounts():
+        mp = mount["mountpoint"]
+        fstype = mount["fstype"]
+
+        # 跳过虚拟文件系统
+        if fstype in _SKIP_FSTYPES:
+            continue
+        # 跳过已处理的挂载点
+        if mp in seen:
+            continue
+        seen.add(mp)
+
+        try:
+            st = os.statvfs(mp)
+        except OSError:
+            continue
+
+        if st.f_blocks == 0:
+            continue
+
+        frsize = st.f_frsize
+        total = frsize * st.f_blocks
+        free = frsize * st.f_bavail
+        used = total - free
+        usage_pct = (used / total * 100) if total else 0.0
+
+        disks.append({
+            "device": mount["device"],
+            "mountpoint": mp,
+            "fstype": fstype,
+            "total": str(total),
+            "used": str(used),
+            "free": str(free),
+            "usage_pct": f"{usage_pct:.1f}%",
+        })
+
+    # 按挂载点排序
+    disks.sort(key=lambda d: d["mountpoint"] or "")
+    return disks
+
+
+def cmd_disk(args: argparse.Namespace) -> int:
+    """磁盘命令：读取并输出各挂载磁盘容量信息"""
+    disks = get_disk_info()
+
+    if not disks:
+        print("未找到可用的磁盘挂载信息。")
+        return 0
+
+    print(f"{'挂载点':<30} {'总容量':>10} {'已用':>10} {'可用':>10} {'使用率':>8}")
+    print("=" * 72)
+    for d in disks:
+        mp = d["mountpoint"] or "N/A"
+        # 截断过长的挂载点路径
+        if len(mp) > 28:
+            mp = "..." + mp[-25:]
+        total = _bytes_to_human(d.get("total")) or "N/A"
+        used = _bytes_to_human(d.get("used")) or "N/A"
+        free = _bytes_to_human(d.get("free")) or "N/A"
+        pct = d.get("usage_pct") or "N/A"
+        print(f"{mp:<30} {total:>10} {used:>10} {free:>10} {pct:>8}")
+
+    return 0
+
+
 def cmd_cpu(args: argparse.Namespace) -> int:
     """CPU 命令：读取并输出 CPU 硬件信息"""
     info = get_cpu_info()
@@ -361,6 +487,14 @@ def build_parser() -> argparse.ArgumentParser:
         description="读取系统总内存、可用内存、已使用内存等容量数据并输出。",
     )
     mem_parser.set_defaults(func=cmd_mem)
+
+    # disk 子命令
+    disk_parser = subparsers.add_parser(
+        "disk",
+        help="读取各挂载磁盘容量信息",
+        description="读取各挂载磁盘的总容量、已用容量、剩余容量及使用率并输出。",
+    )
+    disk_parser.set_defaults(func=cmd_disk)
 
     return parser
 
