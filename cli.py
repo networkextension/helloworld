@@ -10,14 +10,20 @@
 
 import argparse
 import datetime
+import json
 import os
 import platform
 import subprocess
 import sys
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 __version__ = "0.1.0"
+
+
+def _print_json(data: Any) -> None:
+    """将数据以 JSON 格式输出到标准输出"""
+    print(json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def cmd_greet(args: argparse.Namespace) -> int:
@@ -45,7 +51,13 @@ def cmd_time(args: argparse.Namespace) -> int:
     """时间命令：获取并输出当前本地时间"""
     fmt = args.format or "%Y-%m-%d %H:%M:%S"
     now = datetime.datetime.now()
-    print(now.strftime(fmt))
+    time_str = now.strftime(fmt)
+
+    if getattr(args, "output", "text") == "json":
+        _print_json({"time": time_str, "format": fmt})
+        return 0
+
+    print(time_str)
     return 0
 
 
@@ -249,6 +261,10 @@ def cmd_mem(args: argparse.Namespace) -> int:
     """内存命令：读取并输出内存容量信息"""
     info = get_mem_info()
 
+    if getattr(args, "output", "text") == "json":
+        _print_json(info)
+        return 0
+
     print("内存信息")
     print("=" * 40)
     print(f"  总内存:   {_bytes_to_human(info.get('total')) or 'N/A'}")
@@ -365,6 +381,10 @@ def cmd_disk(args: argparse.Namespace) -> int:
     """磁盘命令：读取并输出各挂载磁盘容量信息"""
     disks = get_disk_info()
 
+    if getattr(args, "output", "text") == "json":
+        _print_json(disks)
+        return 0
+
     if not disks:
         print("未找到可用的磁盘挂载信息。")
         return 0
@@ -389,6 +409,10 @@ def cmd_cpu(args: argparse.Namespace) -> int:
     """CPU 命令：读取并输出 CPU 硬件信息"""
     info = get_cpu_info()
 
+    if getattr(args, "output", "text") == "json":
+        _print_json(info)
+        return 0
+
     print("CPU 信息")
     print("=" * 40)
     print(f"  型号:         {info.get('model') or 'N/A'}")
@@ -407,24 +431,34 @@ def cmd_cpu(args: argparse.Namespace) -> int:
 
 def cmd_all(args: argparse.Namespace) -> int:
     """全量命令：一次性输出所有已支持的系统信息汇总"""
+    if getattr(args, "output", "text") == "json":
+        now = datetime.datetime.now()
+        _print_json({
+            "time": {"time": now.strftime("%Y-%m-%d %H:%M:%S"), "format": "%Y-%m-%d %H:%M:%S"},
+            "cpu": get_cpu_info(),
+            "mem": get_mem_info(),
+            "disk": get_disk_info(),
+        })
+        return 0
+
     print("系统信息汇总")
     print("=" * 50)
     print()
 
     # 本地时间
-    cmd_time(argparse.Namespace(format=None))
+    cmd_time(argparse.Namespace(format=None, output="text"))
     print()
 
     # CPU 信息
-    cmd_cpu(argparse.Namespace())
+    cmd_cpu(argparse.Namespace(output="text"))
     print()
 
     # 内存信息
-    cmd_mem(argparse.Namespace())
+    cmd_mem(argparse.Namespace(output="text"))
     print()
 
     # 磁盘信息
-    cmd_disk(argparse.Namespace())
+    cmd_disk(argparse.Namespace(output="text"))
 
     return 0
 
@@ -442,6 +476,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"%(prog)s {__version__}",
         help="显示版本信息并退出",
+    )
+    parser.add_argument(
+        "-o", "--output",
+        choices=["text", "json"],
+        default="text",
+        help="指定输出格式：text（纯文本，默认）或 json（JSON 格式，便于脚本解析）",
     )
 
     subparsers = parser.add_subparsers(title="可用命令", dest="command", help="子命令说明")
