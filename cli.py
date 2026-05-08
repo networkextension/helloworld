@@ -9,6 +9,7 @@
 """
 
 import argparse
+import datetime
 import sys
 from typing import List, Optional
 
@@ -34,6 +35,14 @@ def cmd_list(args: argparse.Namespace) -> int:
     items = args.items or ["apple", "banana", "cherry"]
     for i, item in enumerate(items, 1):
         print(f"{i}. {item}")
+    return 0
+
+
+def cmd_time(args: argparse.Namespace) -> int:
+    """时间命令：获取并输出当前本地时间"""
+    fmt = args.format or "%Y-%m-%d %H:%M:%S"
+    now = datetime.datetime.now()
+    print(now.strftime(fmt))
     return 0
 
 
@@ -89,6 +98,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="自定义列表条目",
     )
     list_parser.set_defaults(func=cmd_list)
+
+    # time 子命令
+    time_parser = subparsers.add_parser(
+        "time",
+        help="获取当前本地时间",
+        description="调用系统接口获取当前本地时间并格式化输出。",
+    )
+    time_parser.add_argument(
+        "-f", "--format",
+        type=str,
+        default=None,
+        help="时间格式字符串 (默认: %%Y-%%m-%%d %%H:%%M:%%S)",
+    )
+    time_parser.set_defaults(func=cmd_time)
 
     return parser
 
