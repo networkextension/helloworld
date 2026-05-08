@@ -136,6 +136,129 @@ def _format_frequency(hz_str: Optional[str]) -> Optional[str]:
         return hz_str
 
 
+def _bytes_to_human(byte_str: Optional[str]) -> Optional[str]:
+    """将字节数字符串转换为人类可读格式"""
+    if not byte_str:
+        return None
+    try:
+        size = int(byte_str)
+        if size >= 1 << 30:
+            return f"{size / (1 << 30):.2f} GB"
+        elif size >= 1 << 20:
+            return f"{size / (1 << 20):.2f} MB"
+        elif size >= 1 << 10:
+            return f"{size / (1 << 10):.2f} KB"
+        return f"{size} B"
+    except ValueError:
+        return byte_str
+
+
+def _parse_vm_stat() -> Dict[str, int]:
+    """解析 macOS vm_stat 输出，返回页面计数字典"""
+    stats: Dict[str, int] = {}
+    try:
+        result = subprocess.run(
+            ["vm_stat"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # 匹配 "Pages free:                               60089."
+            if ":" in line:
+                key_part, val_part = line.split(":", 1)
+                val_clean = val_part.strip().replace(".", "")
+                if val_clean.isdigit():
+                    stats[key_part.strip()] = int(val_clean)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return stats
+
+
+def get_mem_info() -> Dict[str, Optional[str]]:
+    """跨平台采集内存容量信息"""
+    info: Dict[str, Optional[str]] = {
+        "total": None,
+        "available": None,
+        "used": None,
+        "free": None,
+    }
+
+    system = platform.system()
+
+    if system == "Darwin":
+        # 总内存
+        total_bytes = _sysctl("hw.memsize")
+        if total_bytes:
+            info["total"] = total_bytes
+
+        # 页面大小
+        page_size_str = _sysctl("hw.pagesize")
+        page_size = int(page_size_str) if page_size_str and page_size_str.isdigit() else 16384
+
+        # vm_stat 解析
+        vm = _parse_vm_stat()
+        free_pages = vm.get("Pages free", 0)
+        inactive_pages = vm.get("Pages inactive", 0)
+        speculative_pages = vm.get("Pages speculative", 0)
+        active_pages = vm.get("Pages active", 0)
+        wired_pages = vm.get("Pages wired down", 0)
+        compressor_pages = vm.get("Pages occupied by compressor", 0)
+
+        free_bytes = (free_pages + inactive_pages + speculative_pages) * page_size
+        used_bytes = (active_pages + wired_pages + compressor_pages) * page_size
+        available_bytes = free_bytes  # 近似可用
+
+        info["free"] = str(free_bytes)
+        info["used"] = str(used_bytes)
+        info["available"] = str(available_bytes)
+
+    elif system == "Linux":
+        meminfo: Dict[str, str] = {}
+        try:
+            with open("/proc/meminfo", "r") as f:
+                for line in f:
+                    if ":" in line:
+                        key, val = line.split(":", 1)
+                        # val 形如 " 8000000 kB"
+                        num = val.strip().split()[0] if val.strip() else "0"
+                        meminfo[key.strip()] = num
+        except FileNotFoundError:
+            pass
+
+        def _kb_to_bytes(kb: str) -> str:
+            return str(int(kb) * 1024)
+
+        info["total"] = _kb_to_bytes(meminfo.get("MemTotal", "0"))
+        info["free"] = _kb_to_bytes(meminfo.get("MemFree", "0"))
+        info["available"] = _kb_to_bytes(meminfo.get("MemAvailable", meminfo.get("MemFree", "0")))
+        # used ≈ total - available
+        try:
+            used_kb = int(meminfo.get("MemTotal", "0")) - int(meminfo.get("MemAvailable", meminfo.get("MemFree", "0")))
+            info["used"] = _kb_to_bytes(str(used_kb))
+        except ValueError:
+            info["used"] = None
+
+    return info
+
+
+def cmd_mem(args: argparse.Namespace) -> int:
+    """内存命令：读取并输出内存容量信息"""
+    info = get_mem_info()
+
+    print("内存信息")
+    print("=" * 40)
+    print(f"  总内存:   {_bytes_to_human(info.get('total')) or 'N/A'}")
+    print(f"  已使用:   {_bytes_to_human(info.get('used')) or 'N/A'}")
+    print(f"  可用内存: {_bytes_to_human(info.get('available')) or 'N/A'}")
+    print(f"  空闲内存: {_bytes_to_human(info.get('free')) or 'N/A'}")
+
+    return 0
+
+
 def cmd_cpu(args: argparse.Namespace) -> int:
     """CPU 命令：读取并输出 CPU 硬件信息"""
     info = get_cpu_info()
@@ -230,6 +353,14 @@ def build_parser() -> argparse.ArgumentParser:
         description="读取系统 CPU 型号、核心数、频率等硬件信息并输出。",
     )
     cpu_parser.set_defaults(func=cmd_cpu)
+
+    # mem 子命令
+    mem_parser = subparsers.add_parser(
+        "mem",
+        help="读取系统内存容量信息",
+        description="读取系统总内存、可用内存、已使用内存等容量数据并输出。",
+    )
+    mem_parser.set_defaults(func=cmd_mem)
 
     return parser
 
